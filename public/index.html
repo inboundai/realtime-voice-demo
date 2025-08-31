@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Realtime Voice Test</title>
+    <style>
+      body { font-family: system-ui, sans-serif; padding: 2rem; }
+      button { font-size: 1rem; padding: .6rem 1rem; }
+      #log { margin-top: 1rem; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    </style>
+  </head>
+  <body>
+    <h1>OpenAI Realtime — quick test</h1>
+    <p>Click connect, grant mic permissions, and start talking.</p>
+    <button id="btn">Connect & Talk</button>
+    <div id="log"></div>
+    <script>
+      const log = (...args) => (document.getElementById('log').textContent += args.join(' ') + '\n');
+
+      document.getElementById('btn').onclick = async () => {
+        try {
+          log('Requesting ephemeral session...');
+          const ephem = await fetch('/session').then(r => r.json());
+          if (!ephem?.client_secret?.value) {
+            log('Failed to get ephemeral key:', JSON.stringify(ephem));
+            return;
+          }
+
+          const pc = new RTCPeerConnection();
+
+          // Play the model's audio
+          pc.ontrack = (e) => {
+            const audioEl = document.createElement('audio');
+            audioEl.autoplay = true;
+            audioEl.srcObject = e.streams[0];
+            document.body.appendChild(audioEl);
+          };
+
+          // Send mic audio (mono)
+          const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
+          pc.addTrack(ms.getTracks()[0], ms);
+
+          // Optional: get event logs
+          const dc = pc.createDataChannel("oai-events");
+          dc.onmessage = (ev) => log('Event:', ev.data);
+
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+
+          // Exchange SDP with Realtime API
+          const resp = await fetch("https://api.openai.com/v1/realtime?model=gpt-realtime", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${ephem.client_secret.value}`,
+              "Content-Type": "application/sdp"
+            },
+            body: offer.sdp
+          });
+          const answer = { type: "answer", sdp: await resp.text() };
+          await pc.setRemoteDescription(answer);
+
+          log('Connected. Start speaking!');
+        } catch (err) {
+          log('Error:', err?.message || err);
+        }
+      };
+    </script>
+  </body>
+</html>
